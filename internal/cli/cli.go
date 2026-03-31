@@ -20,6 +20,7 @@ func Run() {
 	// ── Flag definitions ──────────────────────────────────────────────────
 	testCmd := flag.String("test", "", "Override auto-detected test command")
 	noTest := flag.Bool("no-test", false, "Skip test loop — run Claude once and exit")
+	model := flag.String("model", "", "Claude model to use (e.g. haiku, sonnet, opus)")
 	maxIter := flag.Int("max", 10, "Max iterations before giving up (default 10)")
 	dryRun := flag.Bool("dry-run", false, "Print the Claude prompt without executing")
 	verbose := flag.Bool("verbose", false, "Stream Claude output live to the terminal")
@@ -86,6 +87,7 @@ func Run() {
 		_, err := claude.Run(prompt, claude.Options{
 			Verbose: *verbose,
 			WorkDir: workDir,
+			Model:   *model,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[oze] Claude error: %v\n", err)
@@ -105,6 +107,7 @@ func Run() {
 		_, err := claude.Run(prompt, claude.Options{
 			Verbose: *verbose,
 			WorkDir: workDir,
+			Model:   *model,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[oze] Claude error on iteration %d: %v\n", i, err)
