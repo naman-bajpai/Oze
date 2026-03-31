@@ -13,9 +13,10 @@ import (
 
 // Options controls how the Claude CLI is invoked.
 type Options struct {
-	Verbose bool   // stream Claude output live to the terminal
-	WorkDir string // working directory for the subprocess
-	Model   string // model override (e.g. "haiku", "sonnet")
+	Verbose    bool   // stream Claude output live to the terminal
+	WorkDir    string // working directory for the subprocess
+	Model      string // model override (e.g. "haiku", "sonnet")
+	SystemPrompt string // extra system prompt appended via --append-system-prompt
 }
 
 // Run sends prompt to `claude --print --dangerously-skip-permissions` and
@@ -29,6 +30,9 @@ func Run(prompt string, opts Options) (string, error) {
 	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	if opts.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
 
 	cmd := exec.CommandContext(context.Background(), "claude", args...)

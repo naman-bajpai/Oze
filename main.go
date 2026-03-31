@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/yourusername/oze/internal/cli"
+	"github.com/naman-bajpai/oze/internal/cli"
 )
 
 func main() {
