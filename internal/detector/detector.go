@@ -18,9 +18,15 @@ func Detect(dir string) (string, error) {
 		return cmd, nil
 	}
 
-	// 2. package.json → scripts.test → "npm test"
+	// 2. package.json → scripts.test → prefer pnpm/yarn/npm based on lockfile
 	if fileExists(dir, "package.json") {
 		if hasNPMTestScript(dir) {
+			if fileExists(dir, "pnpm-lock.yaml") || fileExists(dir, "pnpm-workspace.yaml") {
+				return "pnpm test", nil
+			}
+			if fileExists(dir, "yarn.lock") {
+				return "yarn test", nil
+			}
 			return "npm test", nil
 		}
 	}

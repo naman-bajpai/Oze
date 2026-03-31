@@ -19,6 +19,7 @@ const version = "0.1.0"
 func Run() {
 	// ── Flag definitions ──────────────────────────────────────────────────
 	testCmd := flag.String("test", "", "Override auto-detected test command")
+	noTest := flag.Bool("no-test", false, "Skip test loop — run Claude once and exit")
 	maxIter := flag.Int("max", 10, "Max iterations before giving up (default 10)")
 	dryRun := flag.Bool("dry-run", false, "Print the Claude prompt without executing")
 	verbose := flag.Bool("verbose", false, "Stream Claude output live to the terminal")
@@ -53,10 +54,13 @@ func Run() {
 
 	// ── Auto-detect test command ───────────────────────────────────────────
 	cmd := *testCmd
-	if cmd == "" {
+	if *noTest {
+		cmd = ""
+	} else if cmd == "" {
 		detected, err := detector.Detect(workDir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error:", err)
+			fmt.Fprintln(os.Stderr, "Tip: use --no-test to run Claude once without a test loop.")
 			os.Exit(1)
 		}
 		cmd = detected
@@ -74,6 +78,22 @@ func Run() {
 
 	// ── Main loop ─────────────────────────────────────────────────────────
 	log.Banner(feature)
+
+	// --no-test: run Claude once and exit without a test loop
+	if *noTest {
+		log.Iteration(1, 1, fmt.Sprintf("Calling Claude to implement: %s", feature))
+		prompt := claude.BuildPrompt(1, feature, "", "")
+		_, err := claude.Run(prompt, claude.Options{
+			Verbose: *verbose,
+			WorkDir: workDir,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[oze] Claude error: %v\n", err)
+			os.Exit(1)
+		}
+		log.Success(feature, 1)
+		os.Exit(0)
+	}
 
 	var lastTestOutput string
 
