@@ -1,21 +1,25 @@
-.PHONY: build install clean test
+.PHONY: build test clean install lint
 
 BINARY := oze
-INSTALL_DIR := /usr/local/bin
+MODULE := github.com/yourusername/oze
 
 build:
 	go build -o $(BINARY) .
 
-install: build
-	mv $(BINARY) $(INSTALL_DIR)/$(BINARY)
-	@echo "Installed to $(INSTALL_DIR)/$(BINARY)"
-
-clean:
-	rm -f $(BINARY)
+install:
+	go install .
 
 test:
 	go test ./...
 
-vet:
+lint:
 	go vet ./...
+
+clean:
+	rm -f $(BINARY)
+
+# Quick smoke tests (requires the binary to be built first)
+smoke: build
+	./$(BINARY) --help
+	./$(BINARY) --dry-run "test feature"
 

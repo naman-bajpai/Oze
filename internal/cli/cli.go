@@ -1,11 +1,11 @@
+// Package cli implements flag parsing and the main oze loop.
 package cli
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 
 	"github.com/yourusername/oze/internal/claude"
 	"github.com/yourusername/oze/internal/detector"
@@ -13,156 +13,134 @@ import (
 	"github.com/yourusername/oze/internal/runner"
 )
 
-const maxIterations = 10
+const version = "0.1.0"
 
-const usage = `oze — iterative feature completion loop powered by Claude Code
+// Run is the entry point called from main.go.
+func Run() {
+	// ── Flag definitions ──────────────────────────────────────────────────
+	testCmd := flag.String("test", "", "Override auto-detected test command")
+	maxIter := flag.Int("max", 10, "Max iterations before giving up (default 10)")
+	dryRun := flag.Bool("dry-run", false, "Print the Claude prompt without executing")
+	verbose := flag.Bool("verbose", false, "Stream Claude output live to the terminal")
+	noColor := flag.Bool("no-color", false, "Disable ANSI colors")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 
-Usage:
-  oze [flags] "<feature description>"
+	flag.Usage = usage
+	flag.Parse()
 
-Examples:
-  oze "Add input validation to the signup form"
-  oze --test "npm test" "Implement JWT refresh token rotation"
-  oze --test "pytest -x" --max 5 "Add rate limiting to /api/login"
-  oze --dry-run "Refactor the auth module"
+	if *showVersion {
+		fmt.Printf("oze version %s\n", version)
+		os.Exit(0)
+	}
 
-Flags:
-`
-
-// Config holds all resolved runtime options.
-type Config struct {
-	Feature     string
-	TestCmd     string
-	MaxIter     int
-	DryRun      bool
-	Verbose     bool
-	NoColor     bool
-}
-
-func Run(args []string) error {
-	fs := flag.NewFlagSet("oze", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, usage)
-		fs.PrintDefaults()
+	// ── Positional arg: feature description ───────────────────────────────
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Error: feature description is required.")
 		fmt.Fprintln(os.Stderr)
+		usage()
+		os.Exit(1)
+	}
+	feature := flag.Arg(0)
+
+	log := logger.New(*noColor)
+
+	// ── Resolve working directory ──────────────────────────────────────────
+	workDir, err := filepath.Abs(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving working directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	testCmd  := fs.String("test", "", "Test command to run (overrides auto-detection)")
-	maxIter  := fs.Int("max", maxIterations, "Maximum number of implement→test iterations")
-	dryRun   := fs.Bool("dry-run", false, "Print the Claude prompt without executing")
-	verbose  := fs.Bool("verbose", false, "Stream full Claude output")
-	noColor  := fs.Bool("no-color", false, "Disable colored output")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil
-		}
-		return err
-	}
-
-	if fs.NArg() == 0 {
-		fs.Usage()
-		return fmt.Errorf("feature description required")
-	}
-
-	feature := strings.Join(fs.Args(), " ")
-
-	cfg := Config{
-		Feature: feature,
-		TestCmd: *testCmd,
-		MaxIter: *maxIter,
-		DryRun:  *dryRun,
-		Verbose: *verbose,
-		NoColor: *noColor,
-	}
-
-	return runLoop(cfg)
-}
-
-func runLoop(cfg Config) error {
-	log := logger.New(!cfg.NoColor)
-
-	// Resolve test command
-	testCmd := cfg.TestCmd
-	if testCmd == "" {
-		detected, err := detector.FindTestCommand(".")
-		if err != nil || detected == "" {
-			log.Warn("Could not auto-detect test command. Use --test to specify one.")
-			log.Warn("Example: oze --test \"npm test\" \"" + cfg.Feature + "\"")
-			return fmt.Errorf("no test command found")
-		}
-		testCmd = detected
-		log.Info(fmt.Sprintf("Detected test command: %s", testCmd))
-	} else {
-		log.Info(fmt.Sprintf("Using test command: %s", testCmd))
-	}
-
-	log.Banner(fmt.Sprintf("oze — %s", cfg.Feature))
-
-	if cfg.DryRun {
-		prompt := claude.BuildPrompt(cfg.Feature, testCmd, 1, cfg.MaxIter, "")
-		fmt.Println("\n--- Claude prompt (dry run) ---")
-		fmt.Println(prompt)
-		fmt.Println("--- end ---")
-		return nil
-	}
-
-	// Check claude CLI is available
-	if err := claude.CheckAvailable(); err != nil {
-		return err
-	}
-
-	var lastOutput string
-
-	for i := 1; i <= cfg.MaxIter; i++ {
-		log.Step(i, cfg.MaxIter, "Calling Claude")
-
-		prompt := claude.BuildPrompt(cfg.Feature, testCmd, i, cfg.MaxIter, lastOutput)
-
-		claudeOut, err := claude.Run(prompt, cfg.Verbose)
+	// ── Auto-detect test command ───────────────────────────────────────────
+	cmd := *testCmd
+	if cmd == "" {
+		detected, err := detector.Detect(workDir)
 		if err != nil {
-			log.Error(fmt.Sprintf("Claude failed on iteration %d: %v", i, err))
-			return err
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
 		}
-
-		log.Step(i, cfg.MaxIter, fmt.Sprintf("Running tests: %s", testCmd))
-
-		testOut, testErr := runner.Run(testCmd)
-		lastOutput = testOut
-
-		if testErr == nil {
-			log.Success(fmt.Sprintf("All tests passed on iteration %d!", i))
-			log.Box("Test output", trimOutput(testOut, 40))
-			log.Done(cfg.Feature, i)
-			return nil
-		}
-
-		log.Fail(fmt.Sprintf("Tests failed (iteration %d/%d)", i, cfg.MaxIter))
-		if cfg.Verbose {
-			log.Box("Test output", trimOutput(testOut, 30))
-		} else {
-			log.Box("Test output (last 15 lines)", trimOutput(testOut, 15))
-		}
-
-		if i == cfg.MaxIter {
-			log.Error(fmt.Sprintf("Reached max iterations (%d). Feature not complete.", cfg.MaxIter))
-			log.Warn("Try: oze --max 20 \"" + cfg.Feature + "\"")
-			return fmt.Errorf("max iterations reached without passing tests")
-		}
-
-		log.Info(fmt.Sprintf("Retrying... (%d/%d)", i, cfg.MaxIter))
-		_ = claudeOut // claudeOut already streamed/printed if verbose
+		cmd = detected
+		log.Info(fmt.Sprintf("Auto-detected test command: %s", cmd))
+	} else {
+		log.Info(fmt.Sprintf("Using test command: %s", cmd))
 	}
 
-	return nil
+	// ── Dry-run mode ───────────────────────────────────────────────────────
+	if *dryRun {
+		prompt := claude.BuildPrompt(1, feature, cmd, "")
+		log.DryRun(prompt)
+		os.Exit(0)
+	}
+
+	// ── Main loop ─────────────────────────────────────────────────────────
+	log.Banner(feature)
+
+	var lastTestOutput string
+
+	for i := 1; i <= *maxIter; i++ {
+		log.Iteration(i, *maxIter, fmt.Sprintf("Calling Claude to implement: %s", feature))
+
+		prompt := claude.BuildPrompt(i, feature, cmd, lastTestOutput)
+
+		_, err := claude.Run(prompt, claude.Options{
+			Verbose: *verbose,
+			WorkDir: workDir,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[oze] Claude error on iteration %d: %v\n", i, err)
+			// Non-fatal: continue to run tests; Claude may have made partial changes.
+		}
+
+		log.Info(fmt.Sprintf("Running tests: %s", cmd))
+
+		result, err := runner.Run(workDir, cmd, 300)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[oze] Failed to execute test command: %v\n", err)
+			os.Exit(1)
+		}
+
+		if result.Passed {
+			log.TestPass()
+			log.Success(feature, i)
+			os.Exit(0)
+		}
+
+		lastTestOutput = result.Output
+		log.TestFail(result.Output)
+
+		if i == *maxIter {
+			log.MaxReached(*maxIter, lastTestOutput)
+			os.Exit(1)
+		}
+
+		log.Info(fmt.Sprintf("Tests failed — feeding output back to Claude (iteration %d/%d)", i+1, *maxIter))
+	}
 }
 
-func trimOutput(s string, maxLines int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) <= maxLines {
-		return strings.TrimSpace(s)
-	}
-	kept := lines[len(lines)-maxLines:]
-	return fmt.Sprintf("... (%d lines omitted) ...\n%s", len(lines)-maxLines, strings.Join(kept, "\n"))
+// usage prints the help text.
+func usage() {
+	fmt.Fprintf(os.Stderr, `oze — AI-driven feature loop (v%s)
+
+USAGE
+  oze [flags] "feature description"
+
+EXAMPLES
+  oze "Add rate limiting to /api/login"
+  oze --test "pytest -x" "Add input validation to signup form"
+  oze --dry-run "Refactor auth module"
+  oze --verbose --max 5 "Fix the pagination bug"
+
+FLAGS
+`, version)
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, `
+NOTES
+  oze auto-detects the test command from your project files in this order:
+    CLAUDE.md > package.json > Makefile > pytest.ini/setup.cfg/pyproject.toml >
+    Cargo.toml > go.mod > Gemfile+Rakefile > pom.xml > build.gradle
+
+  Use --test to override if auto-detection picks the wrong command.
+
+  Module path placeholder: replace "yourusername" in go.mod with your GitHub handle.
+`)
 }

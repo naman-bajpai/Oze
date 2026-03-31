@@ -1,25 +1,60 @@
+// Package runner executes a shell test command and captures its output.
 package runner
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-// Run executes a shell command string and returns combined stdout+stderr.
-// Returns a non-nil error if the command exits non-zero.
-func Run(cmd string) (string, error) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return "", nil
-	}
+// Result holds the outcome of a test run.
+type Result struct {
+	Passed   bool
+	Output   string // combined stdout + stderr
+	Duration time.Duration
+}
 
-	c := exec.Command(parts[0], parts[1:]...)
+// Run executes cmdStr (a shell command) in dir and returns a Result.
+// A non-zero exit code is treated as a test failure, not as an error.
+func Run(dir, cmdStr string, timeoutSeconds int) (*Result, error) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 300 // 5-minute default
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Duration(timeoutSeconds)*time.Second,
+	)
+	defer cancel()
+
+	// Run through the shell so the user can pass things like "npm test -- --ci"
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	cmd.Dir = dir
 
 	var buf bytes.Buffer
-	c.Stdout = &buf
-	c.Stderr = &buf
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
 
-	err := c.Run()
-	return buf.String(), err
+	start := time.Now()
+	runErr := cmd.Run()
+	duration := time.Since(start)
+
+	output := buf.String()
+	output = strings.TrimRight(output, "\n")
+
+	passed := runErr == nil
+	// context.DeadlineExceeded means timeout — treat as failure, not error
+	if ctx.Err() == context.DeadlineExceeded {
+		output += "\n[oze] Test command timed out after " +
+			time.Duration(timeoutSeconds).String() + "s"
+		passed = false
+		runErr = nil
+	}
+
+	return &Result{
+		Passed:   passed,
+		Output:   output,
+		Duration: duration,
+	}, runErr
 }

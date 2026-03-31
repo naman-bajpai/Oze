@@ -1,0 +1,15 @@
+# Binary
+oze
+oze.exe
+
+# Go build cache
+/vendor/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
